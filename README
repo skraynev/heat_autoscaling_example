@@ -1,0 +1,8 @@
+The main file in the repository is called autoscale_example.yaml.
+It uses other files for creation several group of resources:
+
+* Autoscaling Group. Each element is a nested stack with VM and Software
+  deployment, which install wordpress.
+* VM with Software deployment, which install DB for wordpress.
+* User/Password for DB
+* Alarms and Scaling Policies for triggering Autoscaling.
