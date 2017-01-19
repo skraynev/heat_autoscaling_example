@@ -1,0 +1,127 @@
+heat_template_version: 2013-05-23
+
+description: >
+  Heat teamplate to demontrate simple Autoscaling use case.
+  It contains Autoscaling Group of VMs with wordpress deployments and
+  one VM with DB.
+  Also there are two alarms, for scaling up/down VMs with wordpress.
+
+parameters:
+  key_name:
+    type: string
+    default: common
+  flavor:
+    type: string
+    default: m1.heat
+  image:
+    type: string
+    default: Fedora-Cloud-Base-20141203-21.x86_64
+  net:
+    type: string
+    default: private
+  db_name:
+    type: string
+    description: WordPress database name
+    default: wordpress
+    constraints:
+      - length: { min: 1, max: 64 }
+        description: db_name must be between 1 and 64 characters
+      - allowed_pattern: '[a-zA-Z][a-zA-Z0-9]*'
+        description: >
+          db_name must begin with a letter and contain only alphanumeric
+          characters
+  db_username:
+    type: string
+    description: The WordPress database admin account username
+    default: admin
+    hidden: true
+    constraints:
+      - length: { min: 1, max: 16 }
+        description: db_username must be between 1 and 64 characters
+      - allowed_pattern: '[a-zA-Z][a-zA-Z0-9]*'
+        description: >
+          db_username must begin with a letter and contain only alphanumeric
+          characters
+
+resources:
+  # user password, generate it here to hide it from outputs
+  db_password:
+    type: OS::Heat::RandomString
+  # separate server with DB
+
+  db_server:
+    type: db_server.yaml
+    properties:
+      key_name: {get_param: key_name}
+      image: { get_param: image }
+      flavor: { get_param: flavor }
+      db_name: {get_param: db_name }
+      db_username: {get_param: db_username }
+      db_password: { get_attr: [ db_password, value ] }
+      net: {get_param: net }
+
+
+  # Autoscaling Group with several servers
+  my_asg:
+    type: OS::Heat::AutoScalingGroup
+    properties:
+      resource:
+        type: wordpress_server.yaml
+        properties:
+          metadata: {"metering.stack": {get_param: "OS::stack_id"}}
+          key_name: {get_param: key_name}
+          image: { get_param: image }
+          flavor: { get_param: flavor }
+          db_name: {get_param: db_name }
+          db_username: {get_param: db_username }
+          db_password: { get_attr: [ db_password, value ] }
+          net: {get_param: net }
+      min_size: 1
+      max_size: 5
+
+  # scaling configuration (alarms, scale policies)
+  scale_up_policy:
+    type: OS::Heat::ScalingPolicy
+    properties:
+      adjustment_type: change_in_capacity
+      auto_scaling_group_id: {get_resource: my_asg}
+      cooldown: 60
+      scaling_adjustment: 2
+
+  scale_down_policy:
+    type: OS::Heat::ScalingPolicy
+    properties:
+      adjustment_type: change_in_capacity
+      auto_scaling_group_id: {get_resource: my_asg}
+      cooldown: 60
+      scaling_adjustment: '-1'
+
+  cpu_alarm_high:
+    type: OS::Ceilometer::Alarm
+    properties:
+      description: Scale-up if count of instance > 0 for 1.5 minute
+      meter_name: network.incoming.bytes
+      statistic: count
+      period: 60
+      evaluation_periods: 1
+      threshold: 1
+      alarm_actions:
+        - {get_attr: [scale_up_policy, alarm_url]}
+      matching_metadata: {'metadata.user_metadata.stack': {get_param: "OS::stack_id"}}
+      comparison_operator: le
+
+  cpu_alarm_low:
+    type: OS::Ceilometer::Alarm
+    properties:
+      description: Scale-down if maximum count of instance >= 2 for 0.5 minutes
+      meter_name: network.incoming.bytes
+      statistic: count
+      period: 60
+      evaluation_periods: 1
+      threshold: 2
+      alarm_actions:
+        - {get_attr: [scale_down_policy, alarm_url]}
+      matching_metadata: {'metadata.user_metadata.stack': {get_param: "OS::stack_id"}}
+      comparison_operator: gt
+
+
